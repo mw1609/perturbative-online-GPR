@@ -4,32 +4,29 @@ import time
 from time import time 
 
 
-
-noise = 1e-3#observation noise of data
+np.random.seed(0)
+noise = 1e-3 #observation noise of data
 jitter = 1e-6 #jitter for numerical stability
 
 ########## for real data
-# data = np.genfromtxt("co2_monthly.csv",delimiter = ",")
-# x = data[:,0].reshape(-1,1)
-# y = data[:,1].reshape(-1,1)
+data = np.genfromtxt("2.csv",delimiter = ",")
+x = data[:,0].reshape(-1,1)
+y = data[:,1].reshape(-1,1)
 
-# x = x[::8]
-# y = y[::8]
+x = x[::70]
+y = y[::70]
 
-
-# print("datapoints",len(x))
 ################################
 
 
-x = np.linspace(-2,2,40).reshape(-1,1)
-x_test = np.linspace(min(x),max(x),300).reshape(-1,1) #test locations
+# x = np.linspace(-2,2,40).reshape(-1,1)
+# x_test = np.linspace(min(x),max(x),300).reshape(-1,1) #test locations
 
-y = np.cos(5*x)+x**2+np.random.randn(len(x)).reshape(-1,1)*noise
-
+# y = np.cos(5*x)+x**2+np.random.randn(len(x)).reshape(-1,1)*noise
 # x = np.sort(100 * np.random.rand(10, 1), axis=0) not equally spaced
 
 # initial batch that is used (must be even number for code)
-init_index = 16
+init_index = 20
 half_ind = int(init_index/2)
 
 
@@ -40,7 +37,7 @@ half_ind = int(init_index/2)
 avg_spacing = (max(x)-min(x))/len(x) # guess for l
 
 x_test = np.linspace(min(x),max(x),300).reshape(-1,1) #test locations
-y_original = np.cos(5*x_test)+x_test**2 #original noiseless function
+# y_original = np.cos(5*x_test)+x_test**2 #original noiseless function
 
 #cov. kernelfunction
 def SE_kernel(X1, X2, sigma,l):
@@ -219,10 +216,10 @@ def LML_gradient(sigma,l,x,y, Kinv = None, init_index = None):
 
     if Kinv is None: #for initial matrix inversion, (not online)
          Kinv = np.linalg.inv(Kxx)
-    alpha = Kinv@y
+    beta = Kinv@y
     
-    dsig = 1/2*np.trace((alpha@np.transpose(alpha)-Kinv)@K_x_x_dsig)
-    dl = 1/2*np.trace((alpha@np.transpose(alpha)-Kinv)@K_x_x_dl)
+    dsig = 1/2*np.trace((beta@np.transpose(beta)-Kinv)@K_x_x_dsig)
+    dl = 1/2*np.trace((beta@np.transpose(beta)-Kinv)@K_x_x_dl)
     grad = np.zeros(2)
     grad[0]= dsig
     grad[1] = dl
@@ -232,8 +229,8 @@ def LML_gradient(sigma,l,x,y, Kinv = None, init_index = None):
 
 # gradient based maximization, fixed stepsize and threshold, initial parameter learning
 def max_gradient(step_size,x,y): 
-    threshold = 1e-4
-    params = np.array([5,avg_spacing[0]])
+    threshold = 1e-3
+    params = np.array([2, avg_spacing[0]])
     # params = np.array([3,3])
     print("guess:", params)
     grad = LML_gradient(params[0],params[1],x,y)
@@ -261,10 +258,10 @@ def standard_GP(x,y,init_index):
     #initially used part of dataset
     x_init = x[0:init_index]
     y_init = y[0:init_index]
-    x_test_init = np.linspace(min(x_init), max(x_init),100)
+    x_test_init = x_test
     
     #initial parameters, and covariance block matrix
-    init_theta = max_gradient(1e-4,x_init,y_init)
+    init_theta = max_gradient(1e-7,x_init,y_init)
     cov2,Kxx22,Kxx2,Kx2x,Kx2x2 = make_covariance_arr(init_theta[0],init_theta[1],x_init,x_test_init)
     # (optional) inference using initial parameters and data points
     Kinv = np.linalg.inv(Kxx22)
@@ -311,8 +308,8 @@ def Online_GP_approx(x,y,init_index,key):
     
     # define variables for convergence of optimization alg.
     global threshold
-    threshold1 = 1e-4       # initialize numerical threshold for parameter change
-    max_iters = 1 # max. iteration number 
+    threshold1 = 2e-1      # initialize numerical threshold for parameter change
+    max_iters = 10# max. iteration number 
 
     for i in range(init_index+1, len(x)+1): # data consideration for remaining subset 
         # consideration of new data point 
@@ -323,7 +320,7 @@ def Online_GP_approx(x,y,init_index,key):
         iters = 0
         theta0  = theta 
         norm_quot = 2
-        theta_diff = threshold + 1
+        theta_diff = threshold1 + 1
         while  iters < max_iters and np.abs(theta_diff) > threshold1: # (loop if online shift was done iteratively, default = 1 single computation)
              # iterative loop for local optimization of LML
             
@@ -349,11 +346,6 @@ def Online_GP_approx(x,y,init_index,key):
 
 
 
-            #estimate learning rate \alpha 
-            shift = -H_inv@grad
-            if iters == 0:
-                alpha = (-shift.T@grad + shift.T@H@theta)/(shift.T@H@shift)
-
 
             
             ##parameter update 
@@ -364,13 +356,19 @@ def Online_GP_approx(x,y,init_index,key):
             H_inv = np.linalg.inv(H) #2x2 matrix, fast
             grad = LML_gradient(theta[0],theta[1],x1,y1,K_inv_new)
 
+            #estimate learning rate \alpha 
+            shift = -H_inv@grad
+            alpha = (-shift.T@grad + shift.T@H@theta)/(shift.T@H@shift)
 
-
-            #compute loop parameter shift for new iteration of optimization loop
-            loop_shift = H_inv@grad
+            alpha = 1
+            global loop_shift
+            loop_shift = alpha*H_inv@grad
             theta1 = theta - loop_shift
 
 
+
+
+            print("iters", iters)
             #calculate change of parameters for convergence criterion
             theta_diff = (np.abs((theta1-theta)@(theta1-theta))) 
             #update theta for new iteration
@@ -381,12 +379,13 @@ def Online_GP_approx(x,y,init_index,key):
                 # print("norm= ", norm[-1])
                 norm_quot = norm[-2]/norm[-1]
                 # print("quotient=",norm_quot)
-           
-     
+            print(alpha)
+            print(theta)
+
 
 
         ##inv. cov. update
-        print("Iterations",iters)
+        # print("Iterations",iters)
         param_shift = theta-theta0 #shift for computation of appr. inverse cov. matrix
 
         if key == "direct": # pertubate inverse matrix 
@@ -430,7 +429,7 @@ def Online_GP_approx(x,y,init_index,key):
     return post_mu, post_cov, theta,K_inv
 
 start = time()
-mu_test,cov_test,theta,_ = Online_GP_approx(x,y,init_index,"indirect")
+mu_test,cov_test,theta,_ = Online_GP_approx(x,y,init_index,"direct")
 end = time()
 print("duration = ",end-start, "s")
 thetaplot = np.round(theta,5)
@@ -439,8 +438,8 @@ thetaplot = np.round(theta,5)
 
 # plot of mean, 2xstd, original function and noisy data
 plt.plot(x_test,mu_test,"k", label = "posterior mean")   
-plt.plot(x,y,"rx",markersize = 0.5, label = "observed data")
-# plt.plot(x_test,y_original, "m",alpha = 0.3,label = "original function")
+plt.plot(x,y,"rx",markersize = 2, label = "observed data")
+# plt.plot(x_test,y_original, "m",alpha = 0.4,label = "original function")
 plt.fill_between(
     x_test.ravel(),
     mu_test.ravel() - 1.96*np.diag(cov_test),
@@ -460,28 +459,32 @@ def ref_standard_GP(x,y,init_index):
     x_init = x[0:init_index]
     y_init = y[0:init_index]
     print("init_index", init_index)
-    # init_theta = max_gradient(1e-9,x,y)
+    # init_theta = max_gradient(1e-2,x,y)
+    # test_theta = init_theta
     global test_theta
-    test_theta = np.array([1.41,1.16])
-    print("theta reference",init_theta)
+    test_theta = theta
+
+    # print("theta reference",init_theta)
     cov2,Kxx22,Kxx2,Kx2x,Kx2x2 = make_covariance_arr(test_theta[0],test_theta[1],x_init,x_test)
     #inference mit den initialen Matrizen und Parametern
     Kinv = np.linalg.inv(Kxx22)
     post_mu = Kx2x@Kinv@y_init
     post_cov = Kx2x2-Kx2x@Kinv@Kxx2
-    return init_theta, post_mu, post_cov, Kxx22
+    return test_theta, post_mu, post_cov, Kxx22
+
+
 
 
 start = time()
-ref_theta,ref_mu,ref_cov,Kxx22 = ref_standard_GP(x,y,len(x))
-thetaref_plot = np.round(test_theta,2)
+ref_theta,ref_mu,ref_cov,Kxx22 =ref_standard_GP(x,y,len(x))
+# thetaref_plot = np.round(test_theta,2)
 end = time()
 print("duration", end-start)
 
 
 
 plt.plot(x_test,ref_mu,"k", label = "posterior mean")   
-plt.plot(x,y,"rx", markersize = 0.5, label = "observed data")
+plt.plot(x,y,"rx", markersize = 2, label = "observed data")
 # plt.plot(x_test,y_original, "m",alpha = 0.3,label = "original function")
 plt.fill_between(
     x_test.ravel(),
